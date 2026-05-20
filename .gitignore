@@ -1,0 +1,18 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+*.log
+npm-debug.log*
+yarn-error.log
+.DS_Store
+.idea/
+.vscode/
+*.pid
+*.seed
+.tmp/
+.cache/
+
+# Windows / Git Bash crash dumps (msys2)
+*.stackdump

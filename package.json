@@ -1,0 +1,11 @@
+{
+  "name": "order-processing-system",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Production-grade microservices Order Processing System (MERN stack, RabbitMQ, Redis, Docker).",
+  "scripts": {
+    "compose:up": "docker compose up --build",
+    "compose:down": "docker compose down"
+  },
+  "license": "UNLICENSED"
+}

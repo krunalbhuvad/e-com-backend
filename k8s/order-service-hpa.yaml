@@ -1,0 +1,49 @@
+# HPA targeting 70% CPU utilization, 3–20 replicas.
+# Why CPU and not RPS-by-default: CPU is the autoscaler v2 metric that requires no extra setup.
+# For an RPS-based scale (which is what we'd actually want), Prometheus Adapter exposes
+# `requests_per_second` as a custom metric — block included below as a commented example.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service
+  namespace: ops
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+      selectPolicy: Max
+# Example custom metric (requires Prometheus Adapter):
+#  - type: Pods
+#    pods:
+#      metric:
+#        name: http_requests_per_second
+#      target:
+#        type: AverageValue
+#        averageValue: "100"
