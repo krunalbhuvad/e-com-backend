@@ -1,182 +1,104 @@
 # Order Processing System
 
-Production-grade microservices backend for an e-commerce **Order Processing System**, built with Node.js, Express, MongoDB (Mongoose), RabbitMQ, Redis, and Docker. Five services behind an Express API Gateway behind Nginx.
+Microservices e-commerce backend with Node.js, MongoDB, RabbitMQ, Redis, and Docker. Includes Auth, Products, Orders, and Notifications services behind an API Gateway.
 
-> Companion docs:
-> - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — design decisions, the 5 mandatory architecture-question deep-dives, saga choreography, DB-per-service rationale.
-> - **[VIVA_CHEATSHEET.md](./VIVA_CHEATSHEET.md)** — one-page summary of every tradeoff for last-minute revision.
-
----
-
-## 1. Architecture diagram
+## Architecture
 
 ```
-              ┌────────────┐
-   client ───►│   Nginx    │  SSL termination, gzip, upstream LB
-              │   :80      │
-              └─────┬──────┘
-                    │
-              ┌─────▼──────┐
-              │ API Gateway│  routing, rate-limit, X-Request-ID,
-              │   :8080    │  opossum circuit breakers, /health
-              └─────┬──────┘
-       ┌────────────┼────────────┬──────────────┐
-       │            │            │              │
-┌──────▼─────┐ ┌────▼─────┐ ┌────▼─────┐  ┌─────▼────────┐
-│   Auth     │ │ Product  │ │  Order   │  │ Notification │
-│  :4001     │ │  :4002   │ │  :4003   │  │   :4004      │
-│ auth_db    │ │product_db│ │ order_db │  │notification_ │
-└──────┬─────┘ └────┬─────┘ └────┬─────┘  │     db       │
-       │            │            │        └──────▲───────┘
-       │            │   sync REST│               │
-       │            │◄───────────┤               │
-       │            │            │               │
-       │     ┌──────▼────────────▼───────────────┴──┐
-       │     │             RabbitMQ                 │
-       │     │  exchanges: orders.events,           │
-       │     │             stock.events             │
-       │     │  events:    order.created,           │
-       │     │             stock.release.requested  │
-       │     │  queues w/ DLQ:                      │
-       │     │             notification.order-created.q
-       │     │             product.stock-release.q  │
-       │     └──────────────────────────────────────┘
-       │
-       └─── shared Redis: rate-limit counters, product cache-aside, idempotency keys
+Client → Nginx:80 → API Gateway:8080 → [Auth:4001 | Product:4002 | Order:4003 | Notification:4004]
+                                           ↓
+                                  [MongoDB, Redis, RabbitMQ]
 ```
 
-| Service              | Port | Owns                | Public path prefix |
-| -------------------- | ---- | ------------------- | ------------------ |
-| api-gateway          | 8080 | —                   | `/api/*`           |
-| auth-service         | 4001 | `auth_db`           | `/api/auth/*`      |
-| product-service      | 4002 | `product_db`        | `/api/products/*`  |
-| order-service        | 4003 | `order_db`          | `/api/orders/*`    |
-| notification-service | 4004 | `notification_db`   | `/api/notifications/*` |
+**Services:**
+- **api-gateway** (port 8080) — Routes requests, rate-limiting, circuit breakers
+- **auth-service** (port 4001) — JWT authentication
+- **product-service** (port 4002) — Product catalog & stock management
+- **order-service** (port 4003) — Order processing & orchestration
+- **notification-service** (port 4004) — Event-driven notifications
+## Getting Started
 
----
+**Requirements:**
+- Docker Desktop 4.x
+- Node.js 20 LTS (optional, for local testing)
+- 3GB free RAM
 
-## 2. Prerequisites
-
-- **Docker Desktop** 4.x (or Docker Engine 24+) with `docker compose` v2.
-- **Node.js 20 LTS** locally (for running unit tests outside containers, optional).
-- ~3 GB free RAM for the full stack.
-
----
-
-## 3. Setup
-
+**Quick Start:**
 ```bash
-# 1. Clone
-git clone <repo-url> order-processing-system
+git clone <repo-url>
 cd order-processing-system
-
-# 2. (Optional) edit per-service .env.example files if you want different secrets
-#    The .env.example files are loaded directly by docker-compose — fine for dev.
-
-# 3. Bring the whole stack up
 docker compose up --build
-
-# 4. Tail logs of one service
-docker compose logs -f order-service
 ```
 
-When healthy you should see all 9 containers (`mongo`, `redis`, `rabbitmq`, 5 services, `nginx`) reporting status `(healthy)` or `Up`.
+All containers should be healthy within 30 seconds.
 
-| URL                                | What it is                            |
-| ---------------------------------- | ------------------------------------- |
-| http://localhost                   | Nginx → API Gateway                   |
-| http://localhost:8080              | API Gateway (direct)                  |
-| http://localhost:8080/health       | Aggregated health of all services     |
-| http://localhost:8080/metrics      | Circuit breaker stats                 |
-| http://localhost:15672             | RabbitMQ UI (guest / guest)           |
+**Access Points:**
+- http://localhost — Nginx frontend
+- http://localhost:8080 — API Gateway
+- http://localhost:8080/health — Service health
+- http://localhost:15672 — RabbitMQ UI (guest/guest)
+## Configuration
 
----
+Each service loads `.env.example` as the default development environment.
 
-## 4. Environment variables
+**Key Variables:**
+| Variable | Example |
+| --- | --- |
+| `PORT` | `4001` |
+| `NODE_ENV` | `development` |
+| `MONGO_URI` | `mongodb://mongo:27017/auth_db` |
+| `REDIS_URL` | `redis://redis:6379` |
+| `RABBITMQ_URL` | `amqp://guest:guest@rabbitmq:5672` |
+| `JWT_ACCESS_SECRET` | (min 32 chars) |
+| `RATE_LIMIT_IP_PER_MIN` | `100` |
 
-Each service ships an `.env.example` that doubles as the dev `.env`. Boot-time validation (`shared/env.js` + Joi) refuses to start a service whose env is malformed.
+> Never commit real secrets. Use k8s Secrets in production (see `k8s/` folder).
+## API Endpoints
 
-| Var                    | Used by               | Example                              |
-| ---------------------- | --------------------- | ------------------------------------ |
-| `PORT`                 | every service         | `4001`                               |
-| `NODE_ENV`             | every service         | `development` / `production`         |
-| `LOG_LEVEL`            | every service         | `info`                               |
-| `MONGO_URI`            | auth/product/order/notification | `mongodb://mongo:27017/auth_db` |
-| `REDIS_URL`            | gateway/product/order | `redis://redis:6379`                 |
-| `RABBITMQ_URL`         | product/order/notification | `amqp://guest:guest@rabbitmq:5672` |
-| `JWT_ACCESS_SECRET`    | auth + every service that verifies | min 32 chars               |
-| `JWT_ACCESS_TTL`       | auth                  | `15m`                                |
-| `JWT_REFRESH_TTL`      | auth                  | `7d`                                 |
-| `BCRYPT_COST`          | auth                  | `12`                                 |
-| `CORS_ALLOWLIST`       | gateway               | `http://localhost:3000` (comma-sep)  |
-| `RATE_LIMIT_IP_PER_MIN`| gateway               | `100`                                |
-| `RATE_LIMIT_USER_PER_MIN` | gateway            | `1000`                               |
-| `PRODUCT_SERVICE_URL`  | gateway, order        | `http://product-service:4002`        |
+Full endpoint collection available in [postman/order-processing.postman_collection.json](./postman/order-processing.postman_collection.json)
 
-> **Never** commit real secrets. The `.env.example` values are dev placeholders. Production uses k8s Secrets (see `k8s/order-service-secret.yaml`).
+**Auth** (`/api/auth/*`)
+- `POST /register` — Register new user
+- `POST /login` — Login (returns JWT)
+- `POST /refresh` — Refresh access token
+- `GET /me` — Current user (requires auth)
 
----
+**Products** (`/api/products/*`)
+- `GET /` — List all products (cached 5 min)
+- `GET /:id` — Get product (cached)
+- `POST /` — Create (admin only)
+- `PATCH /:id` — Update (admin only)
 
-## 5. API endpoints
+**Orders** (`/api/orders/*`)
+- `POST /` — Create order (requires `Idempotency-Key` header)
+- `GET /` — List my orders
+- `GET /:id` — Get order details
+- `PATCH /:id/status` — Update status (admin only)
 
-A Postman collection is committed at [`postman/order-processing.postman_collection.json`](./postman/order-processing.postman_collection.json) with all working examples below.
+**Notifications** (`/api/notifications/*`)
+- `GET ?orderId=<id>` — Get notifications (admin only)
 
-### Auth
+**Health** (all services)
+- `GET /health/live` — Service is running
+- `GET /health/ready` — Service is ready (DB/Redis/RabbitMQ connected)
+- `GET /health` — Gateway aggregated health
+- `GET /metrics` — Circuit breaker stats
+## Troubleshooting
 
-| Method | Path                 | Auth   | Body                                                  |
-| ------ | -------------------- | ------ | ----------------------------------------------------- |
-| POST   | `/api/auth/register` | none   | `{ email, password, name, role? }`                    |
-| POST   | `/api/auth/login`    | none   | `{ email, password }`                                 |
-| POST   | `/api/auth/refresh`  | none   | `{ refreshToken }`                                    |
-| POST   | `/api/auth/logout`   | bearer | `{ refreshToken }`                                    |
-| GET    | `/api/auth/me`       | bearer | —                                                     |
+| Issue | Fix |
+| --- | --- |
+| Containers won't start | Check Docker logs: `docker compose logs <service>` |
+| Port 6379 already in use | Kill old Redis container: `docker rm redis-5` |
+| Services timeout waiting for DB | Increase Docker memory (may need 4GB+) |
+| 503 Upstream Unavailable | A service is down; check `/api/metrics` or service logs |
+| `Idempotency-Key required` | Add header to POST `/api/orders` |
+| RabbitMQ connection errors | Wait for RabbitMQ to boot or restart: `docker compose restart` |
 
-### Products
-
-| Method | Path                       | Auth   | Notes                                                   |
-| ------ | -------------------------- | ------ | ------------------------------------------------------- |
-| GET    | `/api/products`            | any    | Cache-aside, 5-min TTL                                  |
-| GET    | `/api/products/:id`        | any    | Cache-aside                                             |
-| POST   | `/api/products`            | admin  | Create                                                  |
-| PATCH  | `/api/products/:id`        | admin  | Update + invalidates cache via event                    |
-| POST   | `/api/products/reserve`    | service | Internal — atomic stock decrement, returns reservation |
-
-### Orders
-
-| Method | Path                  | Auth   | Headers                          |
-| ------ | --------------------- | ------ | -------------------------------- |
-| POST   | `/api/orders`         | bearer | `Idempotency-Key: <uuid>` (required) |
-| GET    | `/api/orders/:id`     | bearer | —                                |
-| GET    | `/api/orders`         | bearer | List the caller's orders         |
-| PATCH  | `/api/orders/:id/status` | admin | `{ status: "SHIPPED" }` etc.    |
-
-### Notifications
-
-| Method | Path                                   | Auth  |
-| ------ | -------------------------------------- | ----- |
-| GET    | `/api/notifications?orderId=<id>`      | admin |
-
-### Health
-
-| Method | Path             | Notes                                              |
-| ------ | ---------------- | -------------------------------------------------- |
-| GET    | `/health/live`   | Every service. 200 once the process is up.         |
-| GET    | `/health/ready`  | Every service. 503 if DB/broker/redis unreachable. |
-| GET    | `/health`        | Gateway-only. Aggregates all 4 downstream `/ready`.|
-| GET    | `/metrics`       | Gateway + order — circuit-breaker stats (JSON).    |
-
----
-
-## 6. Troubleshooting
-
-| Symptom                                                     | Likely cause / fix                                                                                       |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `service depends on mongo: container_started` hangs         | Mongo healthcheck failing; check `docker logs ops-mongo`. On low-RAM hosts the Mongo daemon OOMs.        |
-| `EAI_AGAIN ... redis` from a service                        | Redis container not ready yet — services back off and retry. If it persists, restart Redis only.        |
-| `Idempotency-Key required` on POST `/api/orders`            | Add the header. Spec mandates it.                                                                       |
-| Place-order returns 503 with `code: "UPSTREAM_UNAVAILABLE"` | Product Service down / breaker open. Hit `/metrics` on the gateway to confirm `open` state.             |
-| `ECONNREFUSED 5672`                                         | RabbitMQ slow to boot — services exit after the boot timeout. `docker compose restart <service>`.       |
-| `helmet` blocks an embedded UI                              | Adjust CORS allowlist via `CORS_ALLOWLIST` — never set `*` in prod.                                     |
+**View Logs:**
+```bash
+docker compose logs -f order-service    # Single service
+docker compose logs                     # All services
+```
 
 ---
 
@@ -197,9 +119,22 @@ A Postman collection is committed at [`postman/order-processing.postman_collecti
 ├── k8s/                        # order-service Deployment + HPA + Service + ConfigMap + Secret
 └── .github/workflows/ci.yml    # lint → test → build → docker-push on PR
 ```
+## Project Structure
 
----
-
-## 8. License
+```
+.
+├── docker-compose.yml              # Full stack definition
+├── nginx/                          # Reverse proxy configuration
+├── shared/                         # Shared utilities (logging, errors, redis, broker)
+├── services/
+│   ├── api-gateway/                # Request routing & circuit breakers
+│   ├── auth-service/               # JWT authentication
+│   ├── product-service/            # Product catalog & stock
+│   ├── order-service/              # Order processing
+│   └── notification-service/       # Event-driven notifications
+├── postman/                        # API collection for testing
+├── k8s/                            # Kubernetes manifests
+└── README.md                       # This file
+```
 
 UNLICENSED — interview project.
